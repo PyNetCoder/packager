@@ -14,7 +14,7 @@ cargo build --release
 
 ## Configuration file
 
-Save the following as `PackagerConfig.toml` and run `packager --config PackagerConfig.toml`:
+Save the following as `PackagerConfig.toml`, edit this `PackagerConfig.toml` file and run `packager --config PackagerConfig.toml`:
 
 ```toml
 [project]
