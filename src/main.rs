@@ -19,12 +19,21 @@ use zip::write::{SimpleFileOptions, ZipWriter};
     name = "packager",
     version,
     about = "GitHub Release packager with configurable archives and checksums",
-    long_about = "Creates binary packages and source archives for GitHub Releases."
+    long_about = "Creates binary packages and source archives for GitHub Releases.",
+    disable_version_flag = true
 )]
 struct Args {
     /// TOML configuration file. When omitted, the six direct-mode arguments are required.
     #[arg(long, value_name = "FILE")]
     config: Option<PathBuf>,
+
+    /// Generate a default PackagerConfig.toml file in the current directory
+    #[arg(long)]
+    init: bool,
+
+    /// Print version information
+    #[arg(short = 'V', action = ArgAction::Version)]
+    cli_version: Option<bool>,
 
     /// Project name, for example: smart-disk-cleaner
     #[arg(short, long, value_name = "NAME")]
@@ -289,8 +298,57 @@ fn main() {
     }
 }
 
+const DEFAULT_CONFIG_TEMPLATE: &str = r#"[project]
+name = "name"
+version = "v1"
+description = "description"
+
+[paths]
+binary = "./target/release/binary"
+source = "."
+output = "releases"
+
+[target]
+os = "os"
+arch = "x86_64"
+
+[compression]
+gzip = true
+bzip2 = true
+xz = true
+zstd = true
+zip = true
+level = 9
+
+[checksum]
+enabled = true
+algorithm = "sha256"
+manifest = true
+
+[packaging]
+universal_source = true
+include_binary = true
+include_source = true
+clean = false
+"#;
+
+fn init_config() -> Result<()> {
+    let config_path = Path::new("PackagerConfig.toml");
+    if config_path.exists() {
+        bail!("PackagerConfig.toml already exists.");
+    }
+    fs::write(config_path, DEFAULT_CONFIG_TEMPLATE)
+        .with_context(|| "Could not write PackagerConfig.toml")?;
+    println!("Created PackagerConfig.toml");
+    Ok(())
+}
+
 fn run() -> Result<()> {
     let args = Args::parse();
+
+    if args.init {
+        return init_config();
+    }
 
     let config = if let Some(config_path) = &args.config {
         let content = fs::read_to_string(config_path).with_context(|| {
@@ -483,12 +541,10 @@ fn run_packaging(settings: Settings) -> Result<()> {
         if current_dir.starts_with(&output_path) || output_path.parent().is_none() {
             bail!("The output directory is too broad to clean safely.");
         }
-        if let Some(binary) = &binary_path {
-            if binary.starts_with(&output_path) {
-                bail!(
-                    "The output directory cannot contain the input binary when clean is enabled."
-                );
-            }
+        if let Some(binary) = &binary_path
+            && binary.starts_with(&output_path)
+        {
+            bail!("The output directory cannot contain the input binary when clean is enabled.");
         }
         clear_directory(&output_path)?;
     }
@@ -648,23 +704,29 @@ fn pack_single_file(
         .to_string_lossy()
         .into_owned();
 
+    let ext = file_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| format!(".{e}"))
+        .unwrap_or_default();
+
     if compression.gzip {
-        let path = out_dir.join(format!("{prefix}.gz"));
+        let path = out_dir.join(format!("{prefix}{ext}.gz"));
         compress_gzip(file_path, &path, compression.level)?;
         artifacts.push(path);
     }
     if compression.bzip2 {
-        let path = out_dir.join(format!("{prefix}.bz2"));
+        let path = out_dir.join(format!("{prefix}{ext}.bz2"));
         compress_bzip2(file_path, &path, compression.level)?;
         artifacts.push(path);
     }
     if compression.xz {
-        let path = out_dir.join(format!("{prefix}.xz"));
+        let path = out_dir.join(format!("{prefix}{ext}.xz"));
         compress_xz(file_path, &path, compression.level)?;
         artifacts.push(path);
     }
     if compression.zstd {
-        let path = out_dir.join(format!("{prefix}.zst"));
+        let path = out_dir.join(format!("{prefix}{ext}.zst"));
         compress_zstd(file_path, &path, compression.level)?;
         artifacts.push(path);
     }
@@ -696,7 +758,7 @@ fn pack_single_file(
     }
 
     if compression.zip {
-        let zip_path = out_dir.join(format!("{prefix}.zip"));
+        let zip_path = out_dir.join(format!("{prefix}{ext}.zip"));
         let mut zip = ZipWriter::new(File::create(&zip_path)?);
         zip.start_file(file_name, zip_options(compression.level))?;
         let mut input = BufReader::new(File::open(file_path)?);
